@@ -129,7 +129,7 @@ function windowBackground(): string {
 function createSettingsWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 320,
-    height: 390,
+    height: 410,
     show: false,
     frame: false,
     resizable: false,
@@ -258,7 +258,7 @@ nativeTheme.on("updated", () => {
 
 void app.whenReady().then(() => {
   if (process.platform !== "darwin") {
-    console.error("Days Percentage only runs on macOS.");
+    console.error("Billing Cycle only runs on macOS.");
     app.quit();
     return;
   }

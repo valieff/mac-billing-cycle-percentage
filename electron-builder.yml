@@ -1,5 +1,5 @@
-appId: com.dayspercentage.menu
-productName: Days Percentage
+appId: com.billingcycle.menu
+productName: Billing Cycle
 copyright: Copyright © 2026
 directories:
   output: release
@@ -23,7 +23,7 @@ mac:
   extendInfo:
     LSUIElement: true
 dmg:
-  title: Days Percentage
+  title: Billing Cycle
 publish:
   provider: github
   releaseType: release

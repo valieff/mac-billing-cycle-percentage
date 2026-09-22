@@ -1,8 +1,8 @@
 {
-  "name": "mac-days-percentage",
+  "name": "mac-billing-cycle-percentage",
   "version": "0.1.0",
   "private": true,
-  "description": "Menu bar percentage of the current monthly billing cycle.",
+  "description": "Menu bar percentage of the current Cursor billing cycle.",
   "main": "dist/main.js",
   "author": "",
   "license": "MIT",
@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && cp src/settings.html dist/settings.html",
     "start": "pnpm run build && electron .",
     "test": "pnpm run build && node --test dist/cycle.test.js",
-    "dist": "pnpm run test && electron-builder --mac"
+    "dist": "pnpm run test && electron-builder --mac",
+    "installer": "pnpm run test && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64"
   },
   "devDependencies": {
     "@types/node": "24.6.0",
