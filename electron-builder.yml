@@ -1,0 +1,29 @@
+appId: com.dayspercentage.menu
+productName: Days Percentage
+copyright: Copyright © 2026
+directories:
+  output: release
+files:
+  - dist/**/*
+  - "!dist/**/*.test.js"
+  - assets/**/*
+  - package.json
+asarUnpack:
+  - assets/**
+mac:
+  category: public.app-category.utilities
+  identity: null
+  target:
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
+  extendInfo:
+    LSUIElement: true
+dmg:
+  title: Days Percentage
+publish:
+  provider: github
+  releaseType: release

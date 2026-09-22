@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Days Percentage</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: canvas;
+        color: canvastext;
+      }
+
+      body {
+        box-sizing: border-box;
+        padding: 16px 16px 14px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+
+      select {
+        width: 100%;
+        margin-bottom: 10px;
+        padding: 6px 8px;
+        border: 1px solid color-mix(in srgb, canvastext 20%, transparent);
+        border-radius: 6px;
+        background: field;
+        color: canvastext;
+        font: inherit;
+      }
+
+      .hint,
+      .summary {
+        margin: 0 0 12px;
+        color: color-mix(in srgb, canvastext 72%, transparent);
+      }
+
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        font-weight: 500;
+      }
+
+      .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 6px;
+        padding: 6px 12px;
+        font: inherit;
+        background: color-mix(in srgb, canvastext 10%, transparent);
+        color: canvastext;
+      }
+
+      button[type="submit"] {
+        background: accentcolor;
+        color: white;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+      }
+    </style>
+  </head>
+  <body>
+    <form id="settings">
+      <h1>Billing reset</h1>
+      <p id="summary" class="summary" hidden></p>
+      <p id="clipped" class="hint" hidden>
+        The menu bar is full, so macOS is hiding this percentage behind the notch. Hide another
+        menu-bar icon and it will show on the right.
+      </p>
+      <label for="reset-day">Reset day</label>
+      <select id="reset-day" required></select>
+      <p class="hint">
+        Counted from this day through the day before the same day next month. Months that don't
+        have this day reset on their last day.
+      </p>
+      <label class="check">
+        <input id="open-at-login" type="checkbox" checked />
+        Open at login
+      </label>
+      <div class="actions">
+        <button id="quit" type="button">Quit</button>
+        <button id="save" type="submit">Save</button>
+      </div>
+    </form>
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>

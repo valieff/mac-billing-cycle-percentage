@@ -1,0 +1,23 @@
+{
+  "name": "mac-days-percentage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Menu bar percentage of the current monthly billing cycle.",
+  "main": "dist/main.js",
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@12.5.1",
+  "scripts": {
+    "generate-icon": "node scripts/generate-icon.mjs",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && cp src/settings.html dist/settings.html",
+    "start": "pnpm run build && electron .",
+    "test": "pnpm run build && node --test dist/cycle.test.js",
+    "dist": "pnpm run test && electron-builder --mac"
+  },
+  "devDependencies": {
+    "@types/node": "24.6.0",
+    "electron": "44.4.3",
+    "electron-builder": "26.15.3",
+    "typescript": "5.9.2"
+  }
+}
