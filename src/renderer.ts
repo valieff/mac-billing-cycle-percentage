@@ -1,18 +1,25 @@
-interface CycleSnapshot {
-  elapsedDays: number;
-  totalDays: number;
+interface PeriodSnapshot {
+  start: number;
+  end: number;
   percent: number;
 }
 
 interface AppState {
   resetDay: number | null;
+  resetTime: string;
+  weekResetDay: number;
+  weekResetTime: string;
   openAtLogin: boolean;
-  progress: CycleSnapshot | null;
+  month: PeriodSnapshot | null;
+  week: PeriodSnapshot;
   menuBarClipped: boolean;
 }
 
 interface SaveSettings {
   resetDay: number;
+  resetTime: string;
+  weekResetDay: number;
+  weekResetTime: string;
   openAtLogin: boolean;
 }
 
@@ -29,97 +36,113 @@ declare global {
   }
 }
 
-function requireSelect(id: string): HTMLSelectElement {
+const weekdays: ReadonlyArray<[number, string]> = [
+  [1, "Monday"],
+  [2, "Tuesday"],
+  [3, "Wednesday"],
+  [4, "Thursday"],
+  [5, "Friday"],
+  [6, "Saturday"],
+  [0, "Sunday"],
+];
+
+const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function requireElement<T extends HTMLElement>(id: string, type: new () => T): T {
   const element = document.getElementById(id);
-  if (!(element instanceof HTMLSelectElement)) {
-    throw new Error(`Missing select #${id}`);
+  if (!(element instanceof type)) {
+    throw new Error(`Missing #${id}`);
   }
   return element;
 }
 
-function requireCheckbox(id: string): HTMLInputElement {
-  const element = document.getElementById(id);
-  if (!(element instanceof HTMLInputElement) || element.type !== "checkbox") {
-    throw new Error(`Missing checkbox #${id}`);
-  }
-  return element;
-}
-
-function requireButton(id: string): HTMLButtonElement {
-  const element = document.getElementById(id);
-  if (!(element instanceof HTMLButtonElement)) {
-    throw new Error(`Missing button #${id}`);
-  }
-  return element;
-}
-
-function requireParagraph(id: string): HTMLParagraphElement {
-  const element = document.getElementById(id);
-  if (!(element instanceof HTMLParagraphElement)) {
-    throw new Error(`Missing paragraph #${id}`);
-  }
-  return element;
-}
-
-function fillDays(select: HTMLSelectElement, selected: number | null): void {
+function fillOptions(
+  select: HTMLSelectElement,
+  options: ReadonlyArray<[number, string]>,
+  selected: number | null,
+  placeholderText?: string,
+): void {
   select.replaceChildren();
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "Choose a day";
-  placeholder.disabled = true;
-  placeholder.selected = selected === null;
-  select.append(placeholder);
-  for (let day = 1; day <= 31; day += 1) {
+  if (placeholderText !== undefined) {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = placeholderText;
+    placeholder.disabled = true;
+    placeholder.selected = selected === null;
+    select.append(placeholder);
+  }
+  for (const [value, label] of options) {
     const option = document.createElement("option");
-    option.value = String(day);
-    option.textContent = String(day);
-    option.selected = day === selected;
+    option.value = String(value);
+    option.textContent = label;
+    option.selected = value === selected;
     select.append(option);
   }
 }
 
-function showSummary(summary: HTMLParagraphElement, state: AppState): void {
-  if (state.progress === null) {
-    summary.hidden = true;
-    summary.textContent = "";
-    return;
-  }
-  summary.hidden = false;
-  summary.textContent = `This cycle: ${state.progress.elapsedDays} of ${state.progress.totalDays} days (${state.progress.percent}%).`;
+const monthDays: ReadonlyArray<[number, string]> = Array.from({ length: 31 }, (_, index) => [index + 1, String(index + 1)]);
+
+const resetFormat = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+function describe(label: string, period: PeriodSnapshot): string {
+  return `${label}: ${period.percent}% gone · resets ${resetFormat.format(new Date(period.end))}`;
 }
 
-function showClipWarning(warning: HTMLParagraphElement, state: AppState): void {
-  warning.hidden = !state.menuBarClipped;
+function showSummary(summary: HTMLParagraphElement, state: AppState): void {
+  const lines = [describe("Week", state.week)];
+  if (state.month !== null) {
+    lines.unshift(describe("Month", state.month));
+  }
+  summary.hidden = false;
+  summary.replaceChildren(
+    ...lines.flatMap((line, index) => (index === 0 ? [line] : [document.createElement("br"), line])),
+  );
 }
 
 async function init(): Promise<void> {
-  const select = requireSelect("reset-day");
-  const openAtLogin = requireCheckbox("open-at-login");
-  const saveButton = requireButton("save");
-  const quitButton = requireButton("quit");
-  const summary = requireParagraph("summary");
-  const clipped = requireParagraph("clipped");
-  const form = document.getElementById("settings");
-  if (!(form instanceof HTMLFormElement)) {
-    throw new Error("Missing settings form");
-  }
+  const daySelect = requireElement("reset-day", HTMLSelectElement);
+  const timeInput = requireElement("reset-time", HTMLInputElement);
+  const weekdaySelect = requireElement("week-reset-day", HTMLSelectElement);
+  const weekTimeInput = requireElement("week-reset-time", HTMLInputElement);
+  const openAtLogin = requireElement("open-at-login", HTMLInputElement);
+  const saveButton = requireElement("save", HTMLButtonElement);
+  const quitButton = requireElement("quit", HTMLButtonElement);
+  const summary = requireElement("summary", HTMLParagraphElement);
+  const clipped = requireElement("clipped", HTMLParagraphElement);
+  const form = requireElement("settings", HTMLFormElement);
 
-  let renderedOnce = false;
+  // Fields the user edited since the last save keep their value when the window reopens.
+  const dirty = new Set<HTMLElement>();
+  for (const field of [daySelect, timeInput, weekdaySelect, weekTimeInput, openAtLogin]) {
+    field.addEventListener("input", () => dirty.add(field));
+    field.addEventListener("change", () => dirty.add(field));
+  }
 
   async function renderState(): Promise<void> {
     const state = await window.settingsApi.getState();
-    const selectedDay = select.value === "" ? null : Number(select.value);
-    const dayDirty = renderedOnce && selectedDay !== state.resetDay;
-    if (!dayDirty) {
-      fillDays(select, state.resetDay);
+    if (!dirty.has(daySelect)) {
+      fillOptions(daySelect, monthDays, state.resetDay, "Choose a day");
     }
-    const loginDirty = renderedOnce && openAtLogin.checked !== state.openAtLogin;
-    if (!loginDirty) {
+    if (!dirty.has(timeInput)) {
+      timeInput.value = state.resetTime;
+    }
+    if (!dirty.has(weekdaySelect)) {
+      fillOptions(weekdaySelect, weekdays, state.weekResetDay);
+    }
+    if (!dirty.has(weekTimeInput)) {
+      weekTimeInput.value = state.weekResetTime;
+    }
+    if (!dirty.has(openAtLogin)) {
       openAtLogin.checked = state.openAtLogin;
     }
-    renderedOnce = true;
     showSummary(summary, state);
-    showClipWarning(clipped, state);
+    clipped.hidden = !state.menuBarClipped;
     saveButton.disabled = false;
   }
 
@@ -130,14 +153,37 @@ async function init(): Promise<void> {
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const resetDay = Number(select.value);
+    const resetDay = Number(daySelect.value);
+    const weekResetDay = Number(weekdaySelect.value);
     if (!Number.isInteger(resetDay) || resetDay < 1 || resetDay > 31) {
-      select.reportValidity();
+      daySelect.reportValidity();
+      return;
+    }
+    if (!timePattern.test(timeInput.value)) {
+      timeInput.reportValidity();
+      return;
+    }
+    if (!Number.isInteger(weekResetDay) || weekResetDay < 0 || weekResetDay > 6) {
+      weekdaySelect.reportValidity();
+      return;
+    }
+    if (!timePattern.test(weekTimeInput.value)) {
+      weekTimeInput.reportValidity();
       return;
     }
     saveButton.disabled = true;
     void window.settingsApi
-      .saveSettings({ resetDay, openAtLogin: openAtLogin.checked })
+      .saveSettings({
+        resetDay,
+        resetTime: timeInput.value,
+        weekResetDay,
+        weekResetTime: weekTimeInput.value,
+        openAtLogin: openAtLogin.checked,
+      })
+      .then(() => {
+        dirty.clear();
+        return renderState();
+      })
       .catch(() => {
         saveButton.disabled = false;
       });
@@ -150,5 +196,4 @@ async function init(): Promise<void> {
 
 void init();
 
-export { };
-
+export {};

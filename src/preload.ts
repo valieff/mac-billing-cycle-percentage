@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 
 interface SaveSettings {
   resetDay: number;
+  resetTime: string;
+  weekResetDay: number;
+  weekResetTime: string;
   openAtLogin: boolean;
 }
 

@@ -39,8 +39,32 @@
       font-weight: 600;
     }
 
-    select {
+    h2 {
+      margin: 14px 0 6px;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .row select {
+      flex: 1;
+      margin-bottom: 0;
+    }
+
+    .row input[type="time"] {
+      width: 116px;
+    }
+
+    select,
+    input[type="time"] {
+      box-sizing: border-box;
       width: 100%;
+      height: 30px;
       margin-bottom: 10px;
       padding: 6px 8px;
       border: 1px solid color-mix(in srgb, canvastext 20%, transparent);
@@ -52,7 +76,7 @@
 
     .hint,
     .summary {
-      margin: 0 0 12px;
+      margin: 0 0 10px;
       color: color-mix(in srgb, canvastext 72%, transparent);
     }
 
@@ -92,18 +116,29 @@
 
 <body>
   <form id="settings">
-    <h1>Billing reset</h1>
+    <h1>Billing Cycle</h1>
     <p id="summary" class="summary" hidden></p>
     <p id="clipped" class="hint" hidden>
-      The menu bar is full, so macOS is hiding this percentage behind the notch. Hide another
-      menu-bar icon and it will show on the right.
+      The menu bar is full, so macOS is hiding these percentages behind the notch. Hide another
+      menu-bar icon and they will show on the right.
     </p>
-    <label for="reset-day">Reset day</label>
-    <select id="reset-day" required></select>
+
+    <h2>Month (top number)</h2>
+    <div class="row">
+      <select id="reset-day" required aria-label="Monthly reset day"></select>
+      <input id="reset-time" type="time" required aria-label="Monthly reset time" />
+    </div>
     <p class="hint">
-      The day your Cursor plan renews. Counted from this day through the day before the same
-      day next month. Shorter months reset on their last day.
+      The day and local time your Cursor plan renews. Shorter months reset on their last day.
     </p>
+
+    <h2>Week (bottom number)</h2>
+    <div class="row">
+      <select id="week-reset-day" required aria-label="Weekly reset day"></select>
+      <input id="week-reset-time" type="time" required aria-label="Weekly reset time" />
+    </div>
+    <p class="hint">When your week starts, in local time.</p>
+
     <label class="check">
       <input id="open-at-login" type="checkbox" checked />
       Open at login

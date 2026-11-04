@@ -1,12 +1,7 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { isValidResetDay, type AppSettings } from "./settings-api.js";
-
-const defaultSettings: AppSettings = {
-  resetDay: null,
-  openAtLogin: true,
-};
+import { defaultSettings, isValidResetDay, isValidTime, isValidWeekday, type AppSettings } from "./settings-api.js";
 
 function settingsPath(): string {
   return path.join(app.getPath("userData"), "settings.json");
@@ -34,6 +29,9 @@ function normalizeSettings(value: unknown): AppSettings {
   const record = value as Record<string, unknown>;
   return {
     resetDay: isValidResetDay(record.resetDay) ? record.resetDay : null,
-    openAtLogin: typeof record.openAtLogin === "boolean" ? record.openAtLogin : true,
+    resetTime: isValidTime(record.resetTime) ? record.resetTime : defaultSettings.resetTime,
+    weekResetDay: isValidWeekday(record.weekResetDay) ? record.weekResetDay : defaultSettings.weekResetDay,
+    weekResetTime: isValidTime(record.weekResetTime) ? record.weekResetTime : defaultSettings.weekResetTime,
+    openAtLogin: typeof record.openAtLogin === "boolean" ? record.openAtLogin : defaultSettings.openAtLogin,
   };
 }

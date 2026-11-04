@@ -11,11 +11,20 @@ import {
 } from "electron";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { cycleProgress } from "./cycle.js";
-import { ipcChannels, parseSaveSettings, type AppState, type SaveSettings } from "./settings-api.js";
+import { midnight, monthProgress, parseTimeOfDay, weekProgress, type PeriodProgress } from "./cycle.js";
+import {
+    ipcChannels,
+    parseSaveSettings,
+    type AppState,
+    type PeriodSnapshot,
+    type SaveSettings,
+} from "./settings-api.js";
 import { loadSettings, saveSettings } from "./store.js";
+import { StackedTextRenderer } from "./tray-icon.js";
 
 let tray: Tray | null = null;
+let trayText: StackedTextRenderer | null = null;
+let trayRefreshId = 0;
 let settingsWindow: BrowserWindow | null = null;
 let openedAt = 0;
 let hiddenAt = 0;
@@ -81,20 +90,24 @@ function ordinal(day: number): string {
   }
 }
 
+const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function snapshot(progress: PeriodProgress): PeriodSnapshot {
+  return { start: progress.start.getTime(), end: progress.end.getTime(), percent: progress.percent };
+}
+
 function currentState(): AppState {
   const settings = loadSettings();
-  if (settings.resetDay === null) {
-    return { ...settings, progress: null, menuBarClipped: isTrayClipped() };
-  }
-  const progress = cycleProgress(new Date(), settings.resetDay);
+  const now = new Date();
+  const week = weekProgress(now, settings.weekResetDay, parseTimeOfDay(settings.weekResetTime) ?? midnight);
+  const month =
+    settings.resetDay === null
+      ? null
+      : monthProgress(now, settings.resetDay, parseTimeOfDay(settings.resetTime) ?? midnight);
   return {
-    resetDay: settings.resetDay,
-    openAtLogin: settings.openAtLogin,
-    progress: {
-      elapsedDays: progress.elapsedDays,
-      totalDays: progress.totalDays,
-      percent: progress.percent,
-    },
+    ...settings,
+    month: month === null ? null : snapshot(month),
+    week: snapshot(week),
     menuBarClipped: isTrayClipped(),
   };
 }
@@ -111,15 +124,37 @@ function refreshTray(): void {
     return;
   }
   const state = currentState();
-  if (state.progress === null || state.resetDay === null) {
+  if (state.month === null || state.resetDay === null) {
+    trayRefreshId += 1;
+    tray.setImage(nativeImage.createEmpty());
     tray.setTitle("—");
     tray.setToolTip("Choose the day your billing cycle resets");
     return;
   }
-  tray.setTitle(`${state.progress.percent}%`, { fontType: "monospacedDigit" });
   tray.setToolTip(
-    `${state.progress.elapsedDays} of ${state.progress.totalDays} days · resets on the ${ordinal(state.resetDay)}`,
+    [
+      `Month ${state.month.percent}% gone · resets on the ${ordinal(state.resetDay)} at ${state.resetTime}`,
+      `Week ${state.week.percent}% gone · resets ${weekdayNames[state.weekResetDay]} at ${state.weekResetTime}`,
+    ].join("\n"),
   );
+  const lines = [`${state.month.percent}%`, `${state.week.percent}%`] as const;
+  const refreshId = ++trayRefreshId;
+  void trayText
+    ?.render(lines)
+    .then((image) => {
+      if (tray === null || refreshId !== trayRefreshId) {
+        return;
+      }
+      tray.setImage(image);
+      tray.setTitle("");
+    })
+    .catch((error: unknown) => {
+      console.error("Could not draw the tray text", error);
+      if (tray !== null && refreshId === trayRefreshId) {
+        tray.setImage(nativeImage.createEmpty());
+        tray.setTitle(`${lines[0]} ${lines[1]}`, { fontType: "monospacedDigit" });
+      }
+    });
 }
 
 function windowBackground(): string {
@@ -129,7 +164,7 @@ function windowBackground(): string {
 function createSettingsWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 320,
-    height: 410,
+    height: 470,
     show: false,
     frame: false,
     resizable: false,
@@ -270,6 +305,7 @@ void app.whenReady().then(() => {
   applyLoginItem(loadSettings().openAtLogin);
   registerIpc();
   settingsWindow = createSettingsWindow();
+  trayText = new StackedTextRenderer();
   createTray();
 
   const refreshTimer = setInterval(refreshTray, 60_000);
