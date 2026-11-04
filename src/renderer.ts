@@ -46,7 +46,27 @@ const weekdays: ReadonlyArray<[number, string]> = [
   [0, "Sunday"],
 ];
 
-const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+const hours: ReadonlyArray<[number, string]> = Array.from({ length: 24 }, (_, hour) => [hour, pad(hour)]);
+const minutes: ReadonlyArray<[number, string]> = Array.from({ length: 60 }, (_, minute) => [minute, pad(minute)]);
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+interface TimeFields {
+  hour: HTMLSelectElement;
+  minute: HTMLSelectElement;
+}
+
+function fillTime(fields: TimeFields, value: string): void {
+  const [hour, minute] = value.split(":").map(Number);
+  fillOptions(fields.hour, hours, hour ?? 0);
+  fillOptions(fields.minute, minutes, minute ?? 0);
+}
+
+function readTime(fields: TimeFields): string {
+  return `${pad(Number(fields.hour.value))}:${pad(Number(fields.minute.value))}`;
+}
 
 function requireElement<T extends HTMLElement>(id: string, type: new () => T): T {
   const element = document.getElementById(id);
@@ -88,16 +108,17 @@ const resetFormat = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
   hour: "2-digit",
   minute: "2-digit",
+  hourCycle: "h23",
 });
 
 function describe(label: string, period: PeriodSnapshot): string {
-  return `${label}: ${period.percent}% gone · resets ${resetFormat.format(new Date(period.end))}`;
+  return `${label}: ${period.percent}% · resets ${resetFormat.format(new Date(period.end))}`;
 }
 
 function showSummary(summary: HTMLParagraphElement, state: AppState): void {
-  const lines = [describe("Week", state.week)];
+  const lines = [describe("Claude Code", state.week)];
   if (state.month !== null) {
-    lines.unshift(describe("Month", state.month));
+    lines.unshift(describe("Cursor", state.month));
   }
   summary.hidden = false;
   summary.replaceChildren(
@@ -107,9 +128,15 @@ function showSummary(summary: HTMLParagraphElement, state: AppState): void {
 
 async function init(): Promise<void> {
   const daySelect = requireElement("reset-day", HTMLSelectElement);
-  const timeInput = requireElement("reset-time", HTMLInputElement);
+  const resetTime: TimeFields = {
+    hour: requireElement("reset-hour", HTMLSelectElement),
+    minute: requireElement("reset-minute", HTMLSelectElement),
+  };
   const weekdaySelect = requireElement("week-reset-day", HTMLSelectElement);
-  const weekTimeInput = requireElement("week-reset-time", HTMLInputElement);
+  const weekResetTime: TimeFields = {
+    hour: requireElement("week-reset-hour", HTMLSelectElement),
+    minute: requireElement("week-reset-minute", HTMLSelectElement),
+  };
   const openAtLogin = requireElement("open-at-login", HTMLInputElement);
   const saveButton = requireElement("save", HTMLButtonElement);
   const quitButton = requireElement("quit", HTMLButtonElement);
@@ -119,7 +146,16 @@ async function init(): Promise<void> {
 
   // Fields the user edited since the last save keep their value when the window reopens.
   const dirty = new Set<HTMLElement>();
-  for (const field of [daySelect, timeInput, weekdaySelect, weekTimeInput, openAtLogin]) {
+  const fields = [
+    daySelect,
+    resetTime.hour,
+    resetTime.minute,
+    weekdaySelect,
+    weekResetTime.hour,
+    weekResetTime.minute,
+    openAtLogin,
+  ];
+  for (const field of fields) {
     field.addEventListener("input", () => dirty.add(field));
     field.addEventListener("change", () => dirty.add(field));
   }
@@ -129,14 +165,14 @@ async function init(): Promise<void> {
     if (!dirty.has(daySelect)) {
       fillOptions(daySelect, monthDays, state.resetDay, "Choose a day");
     }
-    if (!dirty.has(timeInput)) {
-      timeInput.value = state.resetTime;
+    if (!dirty.has(resetTime.hour) && !dirty.has(resetTime.minute)) {
+      fillTime(resetTime, state.resetTime);
     }
     if (!dirty.has(weekdaySelect)) {
       fillOptions(weekdaySelect, weekdays, state.weekResetDay);
     }
-    if (!dirty.has(weekTimeInput)) {
-      weekTimeInput.value = state.weekResetTime;
+    if (!dirty.has(weekResetTime.hour) && !dirty.has(weekResetTime.minute)) {
+      fillTime(weekResetTime, state.weekResetTime);
     }
     if (!dirty.has(openAtLogin)) {
       openAtLogin.checked = state.openAtLogin;
@@ -159,25 +195,17 @@ async function init(): Promise<void> {
       daySelect.reportValidity();
       return;
     }
-    if (!timePattern.test(timeInput.value)) {
-      timeInput.reportValidity();
-      return;
-    }
     if (!Number.isInteger(weekResetDay) || weekResetDay < 0 || weekResetDay > 6) {
       weekdaySelect.reportValidity();
-      return;
-    }
-    if (!timePattern.test(weekTimeInput.value)) {
-      weekTimeInput.reportValidity();
       return;
     }
     saveButton.disabled = true;
     void window.settingsApi
       .saveSettings({
         resetDay,
-        resetTime: timeInput.value,
+        resetTime: readTime(resetTime),
         weekResetDay,
-        weekResetTime: weekTimeInput.value,
+        weekResetTime: readTime(weekResetTime),
         openAtLogin: openAtLogin.checked,
       })
       .then(() => {

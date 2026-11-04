@@ -56,12 +56,18 @@
       margin-bottom: 0;
     }
 
-    .row input[type="time"] {
-      width: 116px;
+    .row .time {
+      display: flex;
+      align-items: center;
+      gap: 3px;
     }
 
-    select,
-    input[type="time"] {
+    .row .time select {
+      flex: none;
+      width: 56px;
+    }
+
+    select {
       box-sizing: border-box;
       width: 100%;
       height: 30px;
@@ -123,21 +129,27 @@
       menu-bar icon and they will show on the right.
     </p>
 
-    <h2>Month (top number)</h2>
+    <h2>Cursor · top number</h2>
     <div class="row">
-      <select id="reset-day" required aria-label="Monthly reset day"></select>
-      <input id="reset-time" type="time" required aria-label="Monthly reset time" />
+      <select id="reset-day" required aria-label="Cursor billing day"></select>
+      <span class="time">
+        <select id="reset-hour" required aria-label="Cursor billing hour"></select>:<select id="reset-minute"
+          required aria-label="Cursor billing minute"></select>
+      </span>
     </div>
     <p class="hint">
-      The day and local time your Cursor plan renews. Shorter months reset on their last day.
+      Your Cursor billing date and local time. Shorter months reset on their last day.
     </p>
 
-    <h2>Week (bottom number)</h2>
+    <h2>Claude Code · bottom number</h2>
     <div class="row">
-      <select id="week-reset-day" required aria-label="Weekly reset day"></select>
-      <input id="week-reset-time" type="time" required aria-label="Weekly reset time" />
+      <select id="week-reset-day" required aria-label="Claude Code weekly reset day"></select>
+      <span class="time">
+        <select id="week-reset-hour" required aria-label="Claude Code weekly reset hour"></select>:<select
+          id="week-reset-minute" required aria-label="Claude Code weekly reset minute"></select>
+      </span>
     </div>
-    <p class="hint">When your week starts, in local time.</p>
+    <p class="hint">When your Claude Code weekly limit resets, in local time.</p>
 
     <label class="check">
       <input id="open-at-login" type="checkbox" checked />

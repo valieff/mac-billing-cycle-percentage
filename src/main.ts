@@ -133,8 +133,8 @@ function refreshTray(): void {
   }
   tray.setToolTip(
     [
-      `Month ${state.month.percent}% gone · resets on the ${ordinal(state.resetDay)} at ${state.resetTime}`,
-      `Week ${state.week.percent}% gone · resets ${weekdayNames[state.weekResetDay]} at ${state.weekResetTime}`,
+      `Cursor month ${state.month.percent}% gone · resets on the ${ordinal(state.resetDay)} at ${state.resetTime}`,
+      `Claude Code week ${state.week.percent}% gone · resets ${weekdayNames[state.weekResetDay]} at ${state.weekResetTime}`,
     ].join("\n"),
   );
   const lines = [`${state.month.percent}%`, `${state.week.percent}%`] as const;

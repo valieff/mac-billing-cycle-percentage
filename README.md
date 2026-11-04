@@ -1,13 +1,11 @@
 # Billing Cycle
 
-Cursor shows how much of your usage is gone. It does not show how much of the billing month is gone, so it is hard to tell whether what you have left will last. This menu-bar app shows that percentage.
+Cursor and Claude Code show how much of your usage is gone. They do not show how much of the billing period is gone, so it is hard to tell whether what you have left will last. This menu-bar app shows two small stacked percentages:
 
-Set the reset day and time to when your Cursor plan renews. The menu bar then shows two small stacked numbers:
+- **Top: Cursor.** Percent of your Cursor billing month that has passed. Enter your billing date and the local time it renews.
+- **Bottom: Claude Code.** Percent of your Claude Code week that has passed. Enter the weekday and local time your weekly limit resets.
 
-- **Top:** percent of the billing month that has passed.
-- **Bottom:** percent of the current week that has passed.
-
-Both use local time and count the exact time of day, rounded down to a whole percent.
+Times are entered in 24-hour format. Both percentages use your local time zone, count the exact time of day, and round down to a whole percent.
 
 ## Install
 
@@ -19,14 +17,14 @@ open "release/Billing Cycle-0.1.0-arm64.dmg"
 
 Drag **Billing Cycle** to Applications. The build is unsigned, so the first open is a right-click → Open.
 
-## Reset day and time
+## Settings
 
-The app asks for the monthly reset day the first time it opens. Open at login stays on until you turn it off. Click the percentages to change the settings.
+The app asks for your Cursor billing date the first time it opens. Open at login stays on until you turn it off. Click the percentages to change the settings.
 
 If the menu bar is full, macOS hides the percentages behind the notch and leaves this panel open. Hide another menu-bar icon and the percentages show on the right.
 
-**Month.** The cycle runs from the reset day at the reset time until the same day and time next month. A reset on the 29th, 30th, or 31st uses the last real day of a shorter month.
+**Cursor (top).** The cycle runs from the billing date at the chosen time until the same date and time next month. A billing date on the 29th, 30th, or 31st uses the last real day of a shorter month.
 
-**Week.** The week runs from the chosen weekday at the chosen time for seven days. It defaults to Monday 00:00.
+**Claude Code (bottom).** The week runs for seven days from the chosen weekday and time. It defaults to Monday 00:00.
 
 `pnpm start` runs the app from a terminal and does not register a login item.
