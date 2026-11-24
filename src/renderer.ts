@@ -1,72 +1,71 @@
-interface PeriodSnapshot {
-  start: number;
-  end: number;
-  percent: number;
+type ProviderId = "claude" | "cursor";
+
+interface ProviderView {
+  id: ProviderId;
+  name: string;
+  status: "off" | "ok" | "stale" | "attention";
+  message: string | null;
+  action: "reconnect" | null;
+  usedFraction: number | null;
+  usedPercent: number | null;
+  elapsedFraction: number | null;
+  elapsedPercent: number | null;
+  windowEnd: number | null;
+  fetchedAt: number | null;
+  busy: boolean;
 }
 
 interface AppState {
-  resetDay: number | null;
-  resetTime: string;
-  weekResetDay: number;
-  weekResetTime: string;
   openAtLogin: boolean;
-  month: PeriodSnapshot | null;
-  week: PeriodSnapshot;
+  claudeEnabled: boolean;
+  cursorEnabled: boolean;
+  onboarded: boolean;
+  providers: ProviderView[];
   menuBarClipped: boolean;
 }
 
-interface SaveSettings {
-  resetDay: number;
-  resetTime: string;
-  weekResetDay: number;
-  weekResetTime: string;
-  openAtLogin: boolean;
+interface ConnectResult {
+  ok: boolean;
+  message: string | null;
 }
 
-interface SettingsApi {
+interface PanelApi {
   getState: () => Promise<AppState>;
-  saveSettings: (settings: SaveSettings) => Promise<void>;
+  connect: (provider: ProviderId) => Promise<ConnectResult>;
+  disconnect: (provider: ProviderId) => Promise<void>;
+  refresh: () => Promise<void>;
+  setOpenAtLogin: (openAtLogin: boolean) => Promise<void>;
+  finishOnboarding: () => Promise<void>;
+  resize: (height: number) => Promise<void>;
   quit: () => Promise<void>;
   onDidShow: (listener: () => void) => void;
+  onStateChanged: (listener: () => void) => void;
 }
 
 declare global {
   interface Window {
-    settingsApi: SettingsApi;
+    panelApi: PanelApi;
   }
 }
 
-const weekdays: ReadonlyArray<[number, string]> = [
-  [1, "Monday"],
-  [2, "Tuesday"],
-  [3, "Wednesday"],
-  [4, "Thursday"],
-  [5, "Friday"],
-  [6, "Saturday"],
-  [0, "Sunday"],
-];
+/** What each provider reads and where it sends it, shown before the user connects. */
+const connectCopy: Record<ProviderId, string> = {
+  claude:
+    "Reads the login Claude Code saved in your Keychain and sends it only to api.anthropic.com to get your weekly usage. macOS won't ask for anything.",
+  cursor:
+    "Cursor encrypts its login, so macOS will ask once for “Cursor Safe Storage”. Click Allow, not Always Allow. The login is then kept encrypted by this app and sent only to api2.cursor.sh.",
+};
 
-const hours: ReadonlyArray<[number, string]> = Array.from({ length: 24 }, (_, hour) => [hour, pad(hour)]);
-const minutes: ReadonlyArray<[number, string]> = Array.from({ length: 60 }, (_, minute) => [minute, pad(minute)]);
+const resetFormat = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
 
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-interface TimeFields {
-  hour: HTMLSelectElement;
-  minute: HTMLSelectElement;
-}
-
-function fillTime(fields: TimeFields, value: string): void {
-  const [hour, minute] = value.split(":").map(Number);
-  fillOptions(fields.hour, hours, hour ?? 0);
-  fillOptions(fields.minute, minutes, minute ?? 0);
-}
-
-function readTime(fields: TimeFields): string {
-  return `${pad(Number(fields.hour.value))}:${pad(Number(fields.minute.value))}`;
-}
+/** Connect attempts in progress and their last error, kept across re-renders. */
+const connecting = new Set<ProviderId>();
+const connectErrors = new Map<ProviderId, string>();
 
 function requireElement<T extends HTMLElement>(id: string, type: new () => T): T {
   const element = document.getElementById(id);
@@ -76,149 +75,212 @@ function requireElement<T extends HTMLElement>(id: string, type: new () => T): T
   return element;
 }
 
-function fillOptions(
-  select: HTMLSelectElement,
-  options: ReadonlyArray<[number, string]>,
-  selected: number | null,
-  placeholderText?: string,
-): void {
-  select.replaceChildren();
-  if (placeholderText !== undefined) {
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = placeholderText;
-    placeholder.disabled = true;
-    placeholder.selected = selected === null;
-    select.append(placeholder);
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: { className?: string; text?: string } = {},
+  ...children: Node[]
+): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tag);
+  if (props.className !== undefined) {
+    element.className = props.className;
   }
-  for (const [value, label] of options) {
-    const option = document.createElement("option");
-    option.value = String(value);
-    option.textContent = label;
-    option.selected = value === selected;
-    select.append(option);
+  if (props.text !== undefined) {
+    element.textContent = props.text;
   }
+  element.append(...children);
+  return element;
 }
 
-const monthDays: ReadonlyArray<[number, string]> = Array.from({ length: 31 }, (_, index) => [index + 1, String(index + 1)]);
-
-const resetFormat = new Intl.DateTimeFormat(undefined, {
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
-
-function describe(label: string, period: PeriodSnapshot): string {
-  return `${label}: ${period.percent}% · resets ${resetFormat.format(new Date(period.end))}`;
+function button(text: string, className: string, onClick: () => void, disabled = false): HTMLButtonElement {
+  const element = el("button", { className, text });
+  element.type = "button";
+  element.disabled = disabled;
+  element.addEventListener("click", onClick);
+  return element;
 }
 
-function showSummary(summary: HTMLParagraphElement, state: AppState): void {
-  const lines = [describe("Claude Code", state.week)];
-  if (state.month !== null) {
-    lines.unshift(describe("Cursor", state.month));
+function barRow(label: string, kind: "used" | "week", fraction: number | null, percent: number | null) {
+  const fill = el("span");
+  fill.style.width = `${Math.round(Math.min(1, Math.max(0, fraction ?? 0)) * 1000) / 10}%`;
+  const bar = el("div", { className: `bar ${kind}` }, fill);
+  bar.setAttribute("role", "meter");
+  bar.setAttribute("aria-label", label);
+  bar.setAttribute("aria-valuemin", "0");
+  bar.setAttribute("aria-valuemax", "100");
+  if (percent !== null) {
+    bar.setAttribute("aria-valuenow", String(percent));
   }
-  summary.hidden = false;
-  summary.replaceChildren(
-    ...lines.flatMap((line, index) => (index === 0 ? [line] : [document.createElement("br"), line])),
+  return el(
+    "div",
+    { className: "bar-row" },
+    el("span", { className: "muted", text: label }),
+    bar,
+    el("span", { className: "value", text: percent === null ? "–" : `${percent}%` }),
   );
 }
 
-async function init(): Promise<void> {
-  const daySelect = requireElement("reset-day", HTMLSelectElement);
-  const resetTime: TimeFields = {
-    hour: requireElement("reset-hour", HTMLSelectElement),
-    minute: requireElement("reset-minute", HTMLSelectElement),
-  };
-  const weekdaySelect = requireElement("week-reset-day", HTMLSelectElement);
-  const weekResetTime: TimeFields = {
-    hour: requireElement("week-reset-hour", HTMLSelectElement),
-    minute: requireElement("week-reset-minute", HTMLSelectElement),
-  };
-  const openAtLogin = requireElement("open-at-login", HTMLInputElement);
-  const saveButton = requireElement("save", HTMLButtonElement);
-  const quitButton = requireElement("quit", HTMLButtonElement);
-  const summary = requireElement("summary", HTMLParagraphElement);
-  const clipped = requireElement("clipped", HTMLParagraphElement);
-  const form = requireElement("settings", HTMLFormElement);
+function paceText(view: ProviderView): string | null {
+  const parts: string[] = [];
+  if (view.windowEnd !== null) {
+    parts.push(`Resets ${resetFormat.format(view.windowEnd)}`);
+  }
+  if (view.usedPercent !== null && view.elapsedPercent !== null) {
+    const difference = view.usedPercent - view.elapsedPercent;
+    parts.push(
+      difference === 0 ? "on pace" : `${Math.abs(difference)} pts ${difference > 0 ? "over" : "under"} pace`,
+    );
+  }
+  return parts.length === 0 ? null : parts.join(" · ");
+}
 
-  // Fields the user edited since the last save keep their value when the window reopens.
-  const dirty = new Set<HTMLElement>();
-  const fields = [
-    daySelect,
-    resetTime.hour,
-    resetTime.minute,
-    weekdaySelect,
-    weekResetTime.hour,
-    weekResetTime.minute,
-    openAtLogin,
+function connect(id: ProviderId, rerender: () => void): void {
+  connecting.add(id);
+  connectErrors.delete(id);
+  rerender();
+  void window.panelApi
+    .connect(id)
+    .then((result) => {
+      if (!result.ok && result.message !== null) {
+        connectErrors.set(id, result.message);
+      }
+    })
+    .catch(() => {
+      connectErrors.set(id, "Could not connect. Try again.");
+    })
+    .finally(() => {
+      connecting.delete(id);
+      rerender();
+    });
+}
+
+function renderProvider(section: HTMLElement, view: ProviderView, rerender: () => void): void {
+  const isConnecting = connecting.has(view.id);
+
+  if (view.status === "off") {
+    const error = connectErrors.get(view.id);
+    section.replaceChildren(
+      el("h2", { text: view.name }),
+      el("p", { className: "muted", text: connectCopy[view.id] }),
+      button(
+        isConnecting ? (view.id === "cursor" ? "Waiting for macOS…" : "Connecting…") : `Connect ${view.name}`,
+        "primary",
+        () => connect(view.id, rerender),
+        isConnecting,
+      ),
+      ...(error === undefined ? [] : [el("p", { className: "status error", text: error })]),
+    );
+    return;
+  }
+
+  const over =
+    view.usedPercent !== null && view.elapsedPercent !== null && view.usedPercent > view.elapsedPercent;
+  const pace = paceText(view);
+  const children: Node[] = [
+    el(
+      "h2",
+      {},
+      el("span", { text: view.name }),
+      button("Disconnect", "link", () => {
+        connectErrors.delete(view.id);
+        void window.panelApi.disconnect(view.id);
+      }),
+    ),
+    barRow("Used", "used", view.usedFraction, view.usedPercent),
+    barRow("Week", "week", view.elapsedFraction, view.elapsedPercent),
   ];
-  for (const field of fields) {
-    field.addEventListener("input", () => dirty.add(field));
-    field.addEventListener("change", () => dirty.add(field));
+  if (pace !== null) {
+    children.push(el("p", { className: over ? "pace over" : "pace muted", text: pace }));
   }
+  const error = connectErrors.get(view.id);
+  if (view.status !== "ok" && view.message !== null) {
+    const status = el("p", { className: `status${view.status === "attention" ? " error" : ""}`, text: view.message });
+    children.push(status);
+  }
+  if (view.action === "reconnect") {
+    children.push(
+      button(isConnecting ? "Waiting for macOS…" : `Reconnect ${view.name}`, "primary", () => connect(view.id, rerender), isConnecting),
+    );
+    if (error !== undefined) {
+      children.push(el("p", { className: "status error", text: error }));
+    }
+  }
+  section.replaceChildren(...children);
+}
 
-  async function renderState(): Promise<void> {
-    const state = await window.settingsApi.getState();
-    if (!dirty.has(daySelect)) {
-      fillOptions(daySelect, monthDays, state.resetDay, "Choose a day");
-    }
-    if (!dirty.has(resetTime.hour) && !dirty.has(resetTime.minute)) {
-      fillTime(resetTime, state.resetTime);
-    }
-    if (!dirty.has(weekdaySelect)) {
-      fillOptions(weekdaySelect, weekdays, state.weekResetDay);
-    }
-    if (!dirty.has(weekResetTime.hour) && !dirty.has(weekResetTime.minute)) {
-      fillTime(weekResetTime, state.weekResetTime);
-    }
-    if (!dirty.has(openAtLogin)) {
+function updatedText(state: AppState): string {
+  const times = state.providers.filter((view) => view.status !== "off").map((view) => view.fetchedAt ?? 0);
+  if (times.length === 0) {
+    return "";
+  }
+  const latest = Math.max(...times);
+  if (latest === 0) {
+    return "Not updated yet";
+  }
+  const minutes = Math.floor((Date.now() - latest) / 60_000);
+  if (minutes < 1) {
+    return "Updated just now";
+  }
+  if (minutes < 60) {
+    return `Updated ${minutes} min ago`;
+  }
+  return `Updated ${resetFormat.format(latest)}`;
+}
+
+async function init(): Promise<void> {
+  const panel = requireElement("panel", HTMLElement);
+  const welcome = requireElement("welcome", HTMLParagraphElement);
+  const clipped = requireElement("clipped", HTMLParagraphElement);
+  const updated = requireElement("updated", HTMLParagraphElement);
+  const openAtLogin = requireElement("open-at-login", HTMLInputElement);
+  const refreshButton = requireElement("refresh", HTMLButtonElement);
+  const doneButton = requireElement("done", HTMLButtonElement);
+  const quitButton = requireElement("quit", HTMLButtonElement);
+  const sections: Record<ProviderId, HTMLElement> = {
+    claude: requireElement("provider-claude", HTMLElement),
+    cursor: requireElement("provider-cursor", HTMLElement),
+  };
+
+  let rendering = Promise.resolve();
+  const render = (): void => {
+    rendering = rendering.then(async () => {
+      const state = await window.panelApi.getState();
+      welcome.hidden = state.onboarded;
+      doneButton.hidden = state.onboarded;
+      clipped.hidden = !state.menuBarClipped;
       openAtLogin.checked = state.openAtLogin;
-    }
-    showSummary(summary, state);
-    clipped.hidden = !state.menuBarClipped;
-    saveButton.disabled = false;
-  }
+      for (const view of state.providers) {
+        renderProvider(sections[view.id], view, render);
+      }
+      const anyConnected = state.providers.some((view) => view.status !== "off");
+      refreshButton.hidden = !anyConnected;
+      refreshButton.disabled = state.providers.some((view) => view.busy);
+      refreshButton.textContent = refreshButton.disabled ? "Refreshing…" : "Refresh";
+      updated.textContent = updatedText(state);
+      updated.hidden = updated.textContent === "";
+      const style = getComputedStyle(document.body);
+      const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      await window.panelApi.resize(Math.ceil(panel.getBoundingClientRect().height + padding));
+    }).catch((error: unknown) => {
+      console.error("Could not render the panel", error);
+    });
+  };
 
-  await renderState();
-  window.settingsApi.onDidShow(() => {
-    void renderState();
+  render();
+  window.panelApi.onDidShow(render);
+  window.panelApi.onStateChanged(render);
+  setInterval(render, 30_000);
+
+  refreshButton.addEventListener("click", () => {
+    void window.panelApi.refresh();
   });
-
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const resetDay = Number(daySelect.value);
-    const weekResetDay = Number(weekdaySelect.value);
-    if (!Number.isInteger(resetDay) || resetDay < 1 || resetDay > 31) {
-      daySelect.reportValidity();
-      return;
-    }
-    if (!Number.isInteger(weekResetDay) || weekResetDay < 0 || weekResetDay > 6) {
-      weekdaySelect.reportValidity();
-      return;
-    }
-    saveButton.disabled = true;
-    void window.settingsApi
-      .saveSettings({
-        resetDay,
-        resetTime: readTime(resetTime),
-        weekResetDay,
-        weekResetTime: readTime(weekResetTime),
-        openAtLogin: openAtLogin.checked,
-      })
-      .then(() => {
-        dirty.clear();
-        return renderState();
-      })
-      .catch(() => {
-        saveButton.disabled = false;
-      });
+  openAtLogin.addEventListener("change", () => {
+    void window.panelApi.setOpenAtLogin(openAtLogin.checked);
   });
-
+  doneButton.addEventListener("click", () => {
+    void window.panelApi.finishOnboarding().then(render);
+  });
   quitButton.addEventListener("click", () => {
-    void window.settingsApi.quit();
+    void window.panelApi.quit();
   });
 }
 

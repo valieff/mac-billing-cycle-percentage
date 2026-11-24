@@ -2,16 +2,32 @@ import { BrowserWindow, nativeImage, type NativeImage } from "electron";
 
 /** Menu-bar icons are laid out in points; macOS centers the image vertically. */
 const heightPt = 22;
+const widthPt = 28;
 const scale = 2;
-const fontSizePt = 9.5;
-/** Baselines chosen so two lines of digits sit centered in the 22pt bar with a small gap between them. */
-const baselinesPt = [9.6, 19.2];
+const barXPt = 1;
+const barWidthPt = widthPt - 2 * barXPt;
+const barHeightPt = 3;
+/** Top edge of each bar: Claude used, Claude week, Cursor used, Cursor week. */
+const barTopsPt = [2, 6, 13, 17];
+
+/** Claude's brand terracotta. Cursor's brand is black and white, so its bar follows the menu bar text color. */
+const claudeColor = "#D97757";
+const trackAlpha = 0.14;
+const weekAlpha = 0.3;
+
+/** Usage and week-elapsed shares for one provider, 0–1, or null to draw the empty track. */
+export interface BarPair {
+  used: number | null;
+  elapsed: number | null;
+}
 
 /**
- * Draws two short lines of text, right-aligned and stacked, into a template image for the tray.
- * Electron's Tray title is single-line, so the stack is rendered with a canvas in a hidden window.
+ * Draws two pairs of thin horizontal bars for the tray: in each pair the solid bar is the share of the
+ * weekly limit used and the faint bar is the share of the week gone. The image keeps its colors, so
+ * it is not a template image and has to be redrawn when the menu bar switches between light and dark.
+ * Rendered with a canvas in a hidden window because the main process has no drawing API.
  */
-export class StackedTextRenderer {
+export class BarsRenderer {
   private readonly window: BrowserWindow;
   private readonly loaded: Promise<void>;
   private lastKey = "";
@@ -32,26 +48,38 @@ export class StackedTextRenderer {
     this.loaded = this.window.loadURL("about:blank");
   }
 
-  async render(lines: readonly [string, string]): Promise<NativeImage> {
-    const key = lines.join("\n");
+  async render(pairs: readonly [BarPair, BarPair], darkMenuBar: boolean): Promise<NativeImage> {
+    const widthPx = barWidthPt * scale;
+    const fills = pairs.flatMap((pair) => [pair.used, pair.elapsed]).map((fraction) =>
+      fraction === null ? 0 : Math.round(Math.min(1, Math.max(0, fraction)) * widthPx),
+    );
+    const ink = darkMenuBar ? "#FFFFFF" : "#000000";
+    const colors = [claudeColor, ink, ink, ink];
+    const key = `${fills.join(",")}|${ink}`;
     if (this.lastImage !== null && key === this.lastKey) {
       return this.lastImage;
     }
     await this.loaded;
-    const args = JSON.stringify({ lines, heightPt, scale, fontSizePt, baselinesPt });
-    const result: unknown = await this.window.webContents.executeJavaScript(`(${drawInPage})(${args})`);
-    if (typeof result !== "object" || result === null) {
-      throw new Error("Tray text rendering returned nothing");
-    }
-    const { dataURL, widthPx } = result as { dataURL: string; widthPx: number };
-    const image = nativeImage.createEmpty();
-    image.addRepresentation({
-      scaleFactor: scale,
-      width: widthPx / scale,
-      height: heightPt,
-      dataURL,
+    const args = JSON.stringify({
+      fills,
+      colors,
+      ink,
+      trackAlpha,
+      weekAlpha,
+      heightPt,
+      widthPt,
+      scale,
+      barXPt,
+      barWidthPt,
+      barHeightPt,
+      barTopsPt,
     });
-    image.setTemplateImage(true);
+    const result: unknown = await this.window.webContents.executeJavaScript(`(${drawInPage})(${args})`);
+    if (typeof result !== "string") {
+      throw new Error("Tray bar rendering returned nothing");
+    }
+    const image = nativeImage.createEmpty();
+    image.addRepresentation({ scaleFactor: scale, width: widthPt, height: heightPt, dataURL: result });
     this.lastKey = key;
     this.lastImage = image;
     return image;
@@ -64,27 +92,31 @@ export class StackedTextRenderer {
 
 /**
  * Runs inside the hidden page. Kept as source text because the main-process build has no DOM types.
- * Receives { lines, heightPt, scale, fontSizePt, baselinesPt } and returns { dataURL, widthPx }.
+ * Bars are drawn in order: Claude used, Claude week, Cursor used, Cursor week. Used bars are opaque in
+ * their color; week bars and tracks use the menu bar's text color, faint.
  */
-const drawInPage = `(options) => {
-  const font = "600 " + options.fontSizePt * options.scale + "px -apple-system, system-ui, sans-serif";
+const drawInPage = `(o) => {
   const canvas = document.createElement("canvas");
+  canvas.width = o.widthPt * o.scale;
+  canvas.height = o.heightPt * o.scale;
   const context = canvas.getContext("2d");
-  context.font = font;
-  // Reserve room for the widest value so the icon keeps its width as the numbers change.
-  const widest = Math.max(
-    context.measureText("100%").width,
-    ...options.lines.map((line) => context.measureText(line).width),
-  );
-  const widthPx = Math.ceil(widest / options.scale) * options.scale + options.scale;
-  canvas.width = widthPx;
-  canvas.height = options.heightPt * options.scale;
-  context.font = font;
-  context.fillStyle = "#000";
-  context.textAlign = "right";
-  context.textBaseline = "alphabetic";
-  options.lines.forEach((line, index) => {
-    context.fillText(line, widthPx - options.scale / 2, options.baselinesPt[index] * options.scale);
+  const x = o.barXPt * o.scale;
+  const width = o.barWidthPt * o.scale;
+  const height = o.barHeightPt * o.scale;
+  const radius = o.scale;
+  const bar = (top, length, color, alpha) => {
+    if (length <= 0) return;
+    context.fillStyle = color;
+    context.globalAlpha = alpha;
+    context.beginPath();
+    context.roundRect(x, top, length, height, radius);
+    context.fill();
+  };
+  o.barTopsPt.forEach((topPt, index) => {
+    const top = topPt * o.scale;
+    const isUsed = index % 2 === 0;
+    bar(top, width, o.ink, o.trackAlpha);
+    bar(top, o.fills[index], o.colors[index], isUsed ? 1 : o.weekAlpha);
   });
-  return { dataURL: canvas.toDataURL("image/png"), widthPx };
+  return canvas.toDataURL("image/png");
 }`;

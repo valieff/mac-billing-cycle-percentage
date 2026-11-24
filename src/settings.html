@@ -12,86 +12,131 @@
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
       font-size: 13px;
       line-height: 1.4;
+      --muted: color-mix(in srgb, canvastext 62%, transparent);
+      --track: color-mix(in srgb, canvastext 12%, transparent);
+      --week: color-mix(in srgb, canvastext 24%, transparent);
+      /* Claude's brand terracotta; Cursor's brand is black and white, so it uses the text color. */
+      --claude: #d97757;
+      --cursor: canvastext;
+      --warn: #e8833a;
+      --over: #e5484d;
+      --line: color-mix(in srgb, canvastext 12%, transparent);
     }
 
     html,
     body {
       margin: 0;
-      height: 100%;
       background: canvas;
       color: canvastext;
     }
 
     body {
-      box-sizing: border-box;
-      padding: 16px 16px 14px;
+      padding: 14px 16px;
+      overflow: hidden;
+      user-select: none;
+      cursor: default;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
     }
 
     h1 {
-      margin: 0 0 10px;
+      margin: 0;
       font-size: 13px;
       font-weight: 650;
     }
 
-    label {
-      display: block;
-      margin-bottom: 6px;
-      font-weight: 600;
-    }
-
     h2 {
-      margin: 14px 0 6px;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin: 0 0 8px;
       font-size: 12px;
       font-weight: 650;
     }
 
-    .row {
-      display: flex;
+    p {
+      margin: 0 0 8px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .provider {
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 40px 1fr 36px;
+      align-items: center;
       gap: 8px;
       margin-bottom: 6px;
+      font-variant-numeric: tabular-nums;
     }
 
-    .row select {
-      flex: 1;
-      margin-bottom: 0;
+    .bar-row .value {
+      text-align: right;
+      font-weight: 600;
     }
 
-    .row .time {
-      display: flex;
-      align-items: center;
-      gap: 3px;
+    .bar {
+      position: relative;
+      height: 8px;
+      border-radius: 4px;
+      background: var(--track);
+      overflow: hidden;
     }
 
-    .row .time select {
-      flex: none;
-      width: 56px;
+    .bar>span {
+      position: absolute;
+      inset: 0 auto 0 0;
+      border-radius: 4px;
     }
 
-    select {
-      box-sizing: border-box;
-      width: 100%;
-      height: 30px;
-      margin-bottom: 10px;
+    .provider.claude .bar.used>span {
+      background: var(--claude);
+    }
+
+    .provider.cursor .bar.used>span {
+      background: var(--cursor);
+    }
+
+    .pace.over {
+      color: var(--over);
+    }
+
+    .bar.week>span {
+      background: var(--week);
+    }
+
+    .status {
+      margin: 6px 0 0;
       padding: 6px 8px;
-      border: 1px solid color-mix(in srgb, canvastext 20%, transparent);
       border-radius: 6px;
-      background: field;
-      color: canvastext;
-      font: inherit;
+      background: color-mix(in srgb, var(--warn) 14%, transparent);
     }
 
-    .hint,
-    .summary {
-      margin: 0 0 10px;
-      color: color-mix(in srgb, canvastext 72%, transparent);
+    .status.error {
+      background: color-mix(in srgb, #e5484d 14%, transparent);
+    }
+
+    footer {
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
     }
 
     .check {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 16px;
-      font-weight: 500;
+      margin: 6px 0 12px;
     }
 
     .actions {
@@ -103,63 +148,68 @@
     button {
       border: 0;
       border-radius: 6px;
-      padding: 6px 12px;
+      padding: 5px 12px;
       font: inherit;
       background: color-mix(in srgb, canvastext 10%, transparent);
       color: canvastext;
     }
 
-    button[type="submit"] {
+    button.primary {
       background: accentcolor;
       color: white;
+    }
+
+    button.link {
+      padding: 0;
+      background: none;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    button.link:hover {
+      color: canvastext;
     }
 
     button:disabled {
       opacity: 0.6;
     }
+
+    button:focus-visible {
+      outline: 2px solid accentcolor;
+      outline-offset: 2px;
+    }
   </style>
 </head>
 
 <body>
-  <form id="settings">
-    <h1>Billing Cycle</h1>
-    <p id="summary" class="summary" hidden></p>
-    <p id="clipped" class="hint" hidden>
-      The menu bar is full, so macOS is hiding these percentages behind the notch. Hide another
-      menu-bar icon and they will show on the right.
+  <main id="panel">
+    <header>
+      <h1>Billing Cycle</h1>
+      <button id="refresh" class="link" type="button">Refresh</button>
+    </header>
+    <p id="welcome" class="muted" hidden>
+      Each pair compares how much of your weekly limit you've used with how much of the week has passed. When
+      Used runs ahead of Week, you're spending faster than the week allows. Connect the tools you use.
     </p>
-
-    <h2>Cursor · top number</h2>
-    <div class="row">
-      <select id="reset-day" required aria-label="Cursor billing day"></select>
-      <span class="time">
-        <select id="reset-hour" required aria-label="Cursor billing hour"></select>:<select id="reset-minute"
-          required aria-label="Cursor billing minute"></select>
-      </span>
-    </div>
-    <p class="hint">
-      Your Cursor billing date and local time. Shorter months reset on their last day.
+    <p id="clipped" class="status" hidden>
+      The menu bar is full, so macOS is hiding the bars behind the notch. Hide another menu-bar icon and they
+      will show on the right.
     </p>
-
-    <h2>Claude Code · bottom number</h2>
-    <div class="row">
-      <select id="week-reset-day" required aria-label="Claude Code weekly reset day"></select>
-      <span class="time">
-        <select id="week-reset-hour" required aria-label="Claude Code weekly reset hour"></select>:<select
-          id="week-reset-minute" required aria-label="Claude Code weekly reset minute"></select>
-      </span>
-    </div>
-    <p class="hint">When your Claude Code weekly limit resets, in local time.</p>
-
-    <label class="check">
-      <input id="open-at-login" type="checkbox" checked />
-      Open at login
-    </label>
-    <div class="actions">
-      <button id="quit" type="button">Quit</button>
-      <button id="save" type="submit">Save</button>
-    </div>
-  </form>
+    <section id="provider-claude" class="provider claude"></section>
+    <section id="provider-cursor" class="provider cursor"></section>
+    <footer>
+      <p id="updated" class="muted"></p>
+      <label class="check">
+        <input id="open-at-login" type="checkbox" />
+        Open at login
+      </label>
+      <div class="actions">
+        <button id="quit" type="button">Quit</button>
+        <button id="done" class="primary" type="button" hidden>Done</button>
+      </div>
+    </footer>
+  </main>
   <script type="module" src="./renderer.js"></script>
 </body>
 

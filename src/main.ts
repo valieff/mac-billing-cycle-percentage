@@ -1,33 +1,41 @@
 import {
-    app,
-    BrowserWindow,
-    ipcMain,
-    nativeImage,
-    nativeTheme,
-    powerMonitor,
-    screen,
-    Tray,
-    type IpcMainInvokeEvent,
+  app,
+  BrowserWindow,
+  ipcMain,
+  nativeImage,
+  nativeTheme,
+  powerMonitor,
+  screen,
+  Tray,
+  type IpcMainInvokeEvent,
 } from "electron";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { midnight, monthProgress, parseTimeOfDay, weekProgress, type PeriodProgress } from "./cycle.js";
 import {
-    ipcChannels,
-    parseSaveSettings,
-    type AppState,
-    type PeriodSnapshot,
-    type SaveSettings,
+  ipcChannels,
+  parseBoolean,
+  parseHeight,
+  parseProviderId,
+  type AppSettings,
+  type AppState,
+  type ConnectResult,
 } from "./settings-api.js";
-import { loadSettings, saveSettings } from "./store.js";
-import { StackedTextRenderer } from "./tray-icon.js";
+import { loadSettings, updateSettings } from "./store.js";
+import { BarsRenderer } from "./tray-icon.js";
+import { UsageService, type ProviderView } from "./usage/service.js";
+import type { ProviderId } from "./usage/types.js";
+
+const panelWidth = 320;
 
 let tray: Tray | null = null;
-let trayText: StackedTextRenderer | null = null;
+let trayBars: BarsRenderer | null = null;
 let trayRefreshId = 0;
-let settingsWindow: BrowserWindow | null = null;
+let panel: BrowserWindow | null = null;
+let usage: UsageService | null = null;
 let openedAt = 0;
 let hiddenAt = 0;
+/** Connect clicks still waiting (possibly on a Keychain prompt), so losing focus doesn't hide the panel. */
+let connecting = 0;
 let cachedStatusAreaMinX: number | null = null;
 
 function statusAreaMinX(): number | null {
@@ -73,74 +81,50 @@ function isTrayClipped(): boolean {
   return bounds.x + bounds.width <= minX;
 }
 
-function ordinal(day: number): string {
-  const mod100 = day % 100;
-  if (mod100 >= 11 && mod100 <= 13) {
-    return `${day}th`;
-  }
-  switch (day % 10) {
-    case 1:
-      return `${day}st`;
-    case 2:
-      return `${day}nd`;
-    case 3:
-      return `${day}rd`;
-    default:
-      return `${day}th`;
-  }
-}
-
-const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-function snapshot(progress: PeriodProgress): PeriodSnapshot {
-  return { start: progress.start.getTime(), end: progress.end.getTime(), percent: progress.percent };
+function isEnabled(id: ProviderId, settings: AppSettings = loadSettings()): boolean {
+  return id === "claude" ? settings.claudeEnabled : settings.cursorEnabled;
 }
 
 function currentState(): AppState {
-  const settings = loadSettings();
-  const now = new Date();
-  const week = weekProgress(now, settings.weekResetDay, parseTimeOfDay(settings.weekResetTime) ?? midnight);
-  const month =
-    settings.resetDay === null
-      ? null
-      : monthProgress(now, settings.resetDay, parseTimeOfDay(settings.resetTime) ?? midnight);
   return {
-    ...settings,
-    month: month === null ? null : snapshot(month),
-    week: snapshot(week),
+    ...loadSettings(),
+    providers: usage?.views() ?? [],
     menuBarClipped: isTrayClipped(),
   };
 }
 
-function applyLoginItem(openAtLogin: boolean): void {
-  if (!app.isPackaged) {
-    return;
+const resetFormat = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function tooltipLine(view: ProviderView): string {
+  if (view.status === "off") {
+    return `${view.name}: not connected`;
   }
-  app.setLoginItemSettings({ openAtLogin });
+  const parts = [
+    view.usedPercent === null ? "usage unknown" : `${view.usedPercent}% used`,
+    view.elapsedPercent === null ? null : `${view.elapsedPercent}% of the week gone`,
+    view.windowEnd === null ? null : `resets ${resetFormat.format(view.windowEnd)}`,
+  ].filter((part) => part !== null);
+  return `${view.name}: ${parts.join(" · ")}`;
 }
 
 function refreshTray(): void {
-  if (tray === null) {
+  if (tray === null || usage === null) {
     return;
   }
-  const state = currentState();
-  if (state.month === null || state.resetDay === null) {
-    trayRefreshId += 1;
-    tray.setImage(nativeImage.createEmpty());
-    tray.setTitle("—");
-    tray.setToolTip("Choose the day your billing cycle resets");
-    return;
-  }
-  tray.setToolTip(
-    [
-      `Cursor month ${state.month.percent}% gone · resets on the ${ordinal(state.resetDay)} at ${state.resetTime}`,
-      `Claude Code week ${state.week.percent}% gone · resets ${weekdayNames[state.weekResetDay]} at ${state.weekResetTime}`,
-    ].join("\n"),
-  );
-  const lines = [`${state.month.percent}%`, `${state.week.percent}%`] as const;
+  const views = usage.views();
+  const [claude, cursor] = views as [ProviderView, ProviderView];
+  tray.setToolTip(views.map(tooltipLine).join("\n"));
   const refreshId = ++trayRefreshId;
-  void trayText
-    ?.render(lines)
+  void trayBars
+    ?.render([
+      { used: claude.usedFraction, elapsed: claude.elapsedFraction },
+      { used: cursor.usedFraction, elapsed: cursor.elapsedFraction },
+    ], nativeTheme.shouldUseDarkColors)
     .then((image) => {
       if (tray === null || refreshId !== trayRefreshId) {
         return;
@@ -149,22 +133,32 @@ function refreshTray(): void {
       tray.setTitle("");
     })
     .catch((error: unknown) => {
-      console.error("Could not draw the tray text", error);
+      console.error("Could not draw the tray bars", error);
       if (tray !== null && refreshId === trayRefreshId) {
+        const text = (view: ProviderView) => (view.usedPercent === null ? "–" : `${view.usedPercent}%`);
         tray.setImage(nativeImage.createEmpty());
-        tray.setTitle(`${lines[0]} ${lines[1]}`, { fontType: "monospacedDigit" });
+        tray.setTitle(`${text(claude)} ${text(cursor)}`, { fontType: "monospacedDigit" });
       }
     });
+}
+
+/** Redraws the tray and tells an open panel that the numbers changed. */
+function publishState(): void {
+  refreshTray();
+  if (panel !== null && panel.isVisible()) {
+    panel.webContents.send(ipcChannels.stateChanged);
+  }
 }
 
 function windowBackground(): string {
   return nativeTheme.shouldUseDarkColors ? "#1e1e1e" : "#f4f4f5";
 }
 
-function createSettingsWindow(): BrowserWindow {
+function createPanel(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 320,
-    height: 470,
+    width: panelWidth,
+    height: 420,
+    useContentSize: true,
     show: false,
     frame: false,
     resizable: false,
@@ -187,15 +181,15 @@ function createSettingsWindow(): BrowserWindow {
   void window.loadFile(path.join(__dirname, "settings.html"));
 
   window.on("blur", () => {
-    if (Date.now() - openedAt < 250 || !canDismissSettings()) {
+    if (Date.now() - openedAt < 250 || !canDismissPanel()) {
       return;
     }
-    hideSettingsWindow();
+    hidePanel();
   });
 
   window.webContents.on("before-input-event", (event, input) => {
-    if (input.type === "keyDown" && input.key === "Escape" && canDismissSettings()) {
-      hideSettingsWindow();
+    if (input.type === "keyDown" && input.key === "Escape" && canDismissPanel()) {
+      hidePanel();
       event.preventDefault();
     }
   });
@@ -203,12 +197,12 @@ function createSettingsWindow(): BrowserWindow {
   return window;
 }
 
-function positionSettingsWindow(): void {
-  if (tray === null || settingsWindow === null) {
+function positionPanel(): void {
+  if (tray === null || panel === null) {
     return;
   }
   const trayBounds = tray.getBounds();
-  const windowBounds = settingsWindow.getBounds();
+  const windowBounds = panel.getBounds();
   let x = Math.round(trayBounds.x + trayBounds.width / 2 - windowBounds.width / 2);
   let y = Math.round(trayBounds.y + trayBounds.height + 4);
   if (trayBounds.width === 0 || trayBounds.height === 0) {
@@ -218,68 +212,122 @@ function positionSettingsWindow(): void {
   }
   const { workArea } = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
   x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - windowBounds.width);
-  settingsWindow.setPosition(x, y, false);
+  panel.setPosition(x, y, false);
 }
 
-function canDismissSettings(): boolean {
-  return loadSettings().resetDay !== null && !isTrayClipped();
+function canDismissPanel(): boolean {
+  return connecting === 0 && loadSettings().onboarded && !isTrayClipped();
 }
 
-function hideSettingsWindow(): void {
-  if (settingsWindow === null) {
+function hidePanel(): void {
+  if (panel === null) {
     return;
   }
   hiddenAt = Date.now();
-  settingsWindow.hide();
+  panel.hide();
 }
 
-function showSettingsWindow(): void {
-  if (settingsWindow === null) {
+function showPanel(): void {
+  if (panel === null) {
     return;
   }
   openedAt = Date.now();
-  positionSettingsWindow();
-  settingsWindow.show();
-  settingsWindow.focus();
-  settingsWindow.webContents.send(ipcChannels.shown);
+  positionPanel();
+  panel.show();
+  panel.focus();
+  panel.webContents.send(ipcChannels.shown);
+  usage?.refreshStale();
 }
 
 function createTray(): void {
   tray = new Tray(nativeImage.createEmpty());
   tray.setIgnoreDoubleClickEvents(true);
   tray.on("click", () => {
-    if (settingsWindow === null) {
+    if (panel === null) {
       return;
     }
-    if (settingsWindow.isVisible()) {
-      if (canDismissSettings()) {
-        hideSettingsWindow();
+    if (panel.isVisible()) {
+      if (canDismissPanel()) {
+        hidePanel();
       } else {
-        settingsWindow.focus();
+        panel.focus();
       }
       return;
     }
     if (Date.now() - hiddenAt < 250) {
       return;
     }
-    showSettingsWindow();
+    showPanel();
   });
   refreshTray();
+}
+
+function applyLoginItem(openAtLogin: boolean): void {
+  if (!app.isPackaged) {
+    return;
+  }
+  app.setLoginItemSettings({ openAtLogin });
 }
 
 function registerIpc(): void {
   ipcMain.handle(ipcChannels.getState, (): AppState => currentState());
 
-  ipcMain.handle(ipcChannels.saveSettings, (_event: IpcMainInvokeEvent, payload: unknown): void => {
-    const saved: SaveSettings = parseSaveSettings(payload);
-    saveSettings(saved);
-    applyLoginItem(saved.openAtLogin);
-    refreshTray();
-    if (canDismissSettings()) {
-      hideSettingsWindow();
+  ipcMain.handle(ipcChannels.connect, async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ConnectResult> => {
+    const id = parseProviderId(payload);
+    if (usage === null) {
+      return { ok: false, message: "Still starting up. Try again in a moment." };
+    }
+    connecting += 1;
+    try {
+      const result = await usage.connect(id);
+      if (result.kind === "ok") {
+        updateSettings(id === "claude" ? { claudeEnabled: true } : { cursorEnabled: true });
+        publishState();
+        return { ok: true, message: null };
+      }
+      publishState();
+      return { ok: false, message: result.message };
+    } finally {
+      connecting -= 1;
+      if (connecting === 0) {
+        panel?.focus();
+      }
+    }
+  });
+
+  ipcMain.handle(ipcChannels.disconnect, async (_event: IpcMainInvokeEvent, payload: unknown): Promise<void> => {
+    const id = parseProviderId(payload);
+    updateSettings(id === "claude" ? { claudeEnabled: false } : { cursorEnabled: false });
+    await usage?.disconnect(id);
+    publishState();
+  });
+
+  ipcMain.handle(ipcChannels.refresh, (): void => {
+    usage?.refreshAll();
+  });
+
+  ipcMain.handle(ipcChannels.setOpenAtLogin, (_event: IpcMainInvokeEvent, payload: unknown): void => {
+    const openAtLogin = parseBoolean(payload);
+    updateSettings({ openAtLogin });
+    applyLoginItem(openAtLogin);
+  });
+
+  ipcMain.handle(ipcChannels.finishOnboarding, (): void => {
+    updateSettings({ onboarded: true });
+    if (canDismissPanel()) {
+      hidePanel();
+    }
+  });
+
+  ipcMain.handle(ipcChannels.resize, (_event: IpcMainInvokeEvent, payload: unknown): void => {
+    if (panel === null) {
       return;
     }
-    settingsWindow?.webContents.send(ipcChannels.shown);
+    const height = parseHeight(payload);
+    const [, current] = panel.getContentSize();
+    if (current !== height) {
+      panel.setContentSize(panelWidth, height, false);
+    }
   });
 
   ipcMain.handle(ipcChannels.quit, (): void => {
@@ -288,10 +336,20 @@ function registerIpc(): void {
 }
 
 nativeTheme.on("updated", () => {
-  settingsWindow?.setBackgroundColor(windowBackground());
+  panel?.setBackgroundColor(windowBackground());
+  // The tray image keeps its colors, so its neutral parts must follow the menu bar.
+  refreshTray();
 });
 
+// A second launch would add a second set of bars to the menu bar, so it quits and leaves the first.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+
 void app.whenReady().then(() => {
+  if (!app.hasSingleInstanceLock()) {
+    return;
+  }
   if (process.platform !== "darwin") {
     console.error("Billing Cycle only runs on macOS.");
     app.quit();
@@ -303,27 +361,35 @@ void app.whenReady().then(() => {
   }
 
   applyLoginItem(loadSettings().openAtLogin);
+
+  usage = new UsageService((id) => isEnabled(id), publishState);
   registerIpc();
-  settingsWindow = createSettingsWindow();
-  trayText = new StackedTextRenderer();
+  panel = createPanel();
+  trayBars = new BarsRenderer();
   createTray();
 
-  const refreshTimer = setInterval(refreshTray, 60_000);
-  powerMonitor.on("resume", refreshTray);
+  // Each minute: redraw the week bars (no network) and fetch any provider that is due.
+  const tick = (): void => {
+    usage?.refreshDue();
+    refreshTray();
+  };
+  tick();
+  const timer = setInterval(tick, 60_000);
+  powerMonitor.on("resume", () => {
+    usage?.refreshStale();
+    refreshTray();
+  });
   app.on("before-quit", () => {
-    clearInterval(refreshTimer);
+    clearInterval(timer);
   });
 
-  if (loadSettings().resetDay === null) {
-    showSettingsWindow();
-  }
-
+  // The panel opens by itself only on first launch, for onboarding. After that, launches stay quiet.
   setTimeout(() => {
-    if (settingsWindow === null || settingsWindow.isVisible()) {
+    if (panel === null || panel.isVisible()) {
       return;
     }
-    if (loadSettings().resetDay === null || isTrayClipped()) {
-      showSettingsWindow();
+    if (!loadSettings().onboarded) {
+      showPanel();
     }
   }, 400);
 });
