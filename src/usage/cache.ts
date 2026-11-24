@@ -1,7 +1,7 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { providerIds, type ProviderId, type Usage } from "./types.js";
+import { providerIds, type ProviderId, type Usage, type UsageDetail } from "./types.js";
 
 export interface CachedReading {
   usage: Usage;
@@ -16,6 +16,29 @@ function cachePath(): string {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readDetail(value: unknown): UsageDetail[] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.label !== "string") {
+    return [];
+  }
+  const windowStart = numberOrNull(record.windowStart);
+  const windowEnd = numberOrNull(record.windowEnd);
+  const validWindow = windowStart !== null && windowEnd !== null && windowEnd > windowStart;
+  return [
+    {
+      label: record.label,
+      usedPercent: numberOrNull(record.usedPercent),
+      windowStart: validWindow ? windowStart : null,
+      windowEnd: validWindow ? windowEnd : null,
+      showElapsed: record.showElapsed === true,
+      timeLabel: typeof record.timeLabel === "string" ? record.timeLabel : "Time",
+    },
+  ];
 }
 
 /** The last good reading per provider, so the bars survive restarts and outages. */
@@ -50,6 +73,7 @@ export function loadCache(): ReadingCache {
           usedPercent: numberOrNull(usage.usedPercent),
           windowStart: validWindow ? windowStart : null,
           windowEnd: validWindow ? windowEnd : null,
+          details: Array.isArray(usage.details) ? usage.details.flatMap(readDetail) : [],
         },
       };
     }

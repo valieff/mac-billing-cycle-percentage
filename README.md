@@ -9,7 +9,10 @@ The menu bar shows four thin bars in two pairs:
 
 In each pair, the solid bar is the share of the weekly limit you've used: Claude's orange for Claude Code, and black or white (matching the menu bar) for Cursor, whose brand is black and white. The faint gray bar is the share of the week that has passed. When the solid bar is longer, you're spending faster than the week allows.
 
-Click the bars to open the panel. It shows the same numbers with percentages, when each week resets, and how many points you are over or under pace. The pace line turns red when you're over.
+Click the bars to open the panel. It shows the same numbers with percentages, when each week resets, and how many points you are over or under pace. The pace line turns red when you're over. The panel also shows:
+
+- **Claude Code:** the same limits as Claude Code's `/usage`: the weekly limit for each model that has one (for example Fable), and the 5-hour session. Each gets its own pair of bars: usage, and how much of its week or 5 hours has passed.
+- **Cursor:** on plans that include Grok Bot, how the week's usage splits between Cursor and Grok Bot. Grok Bot's share comes from its weekly breakdown, and Cursor's is the rest of the total.
 
 The bars follow the system's Light or Dark setting. In Light mode with a dark wallpaper, where macOS draws the menu bar with white text, the Cursor and week bars come out black and are hard to see.
 

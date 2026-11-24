@@ -4,12 +4,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { decryptCursorToken, isEncryptedCursorToken, jwtExpiry, parseCursorUsage, unquote } from "./parse.js";
+import {
+  decryptCursorToken,
+  isEncryptedCursorToken,
+  jwtExpiry,
+  parseCursorUsage,
+  parseGrokBotShare,
+  unquote,
+  withGrokBotSplit,
+} from "./parse.js";
 import { ProviderError, type FetchResult } from "./types.js";
 
 const run = promisify(execFile);
 
-const usageUrl = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
+const dashboardUrl = "https://api2.cursor.sh/aiserver.v1.DashboardService/";
 const stateDatabase = path.join(
   os.homedir(),
   "Library",
@@ -145,15 +153,7 @@ async function fetchWithToken(token: string): Promise<FetchResult> {
 
   let response: Response;
   try {
-    response = await net.fetch(usageUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "Connect-Protocol-Version": "1",
-      },
-      body: "{}",
-    });
+    response = await callDashboard("GetCurrentPeriodUsage", token);
   } catch {
     throw new ProviderError("Can't reach Cursor. Showing the last reading.", "stale");
   }
@@ -172,5 +172,29 @@ async function fetchWithToken(token: string): Promise<FetchResult> {
   if (usage === null) {
     throw new ProviderError("Cursor reports no usage limit for this plan.", "attention");
   }
-  return { kind: "ok", usage };
+  return { kind: "ok", usage: withGrokBotSplit(usage, await fetchGrokBotShare(token)) };
+}
+
+function callDashboard(method: string, token: string, timeoutMs = 20_000): Promise<Response> {
+  return net.fetch(dashboardUrl + method, {
+    method: "POST",
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "Connect-Protocol-Version": "1",
+    },
+    body: "{}",
+  });
+}
+
+/** Grok Bot's share of the week, on plans that include Grok Bot. Optional: any failure means "not shown". */
+async function fetchGrokBotShare(token: string) {
+  try {
+    // Short timeout: this is extra detail and must not hold back the Cursor reading.
+    const response = await callDashboard("GetGrokBotUsageBreakdown", token, 8_000);
+    return response.ok ? parseGrokBotShare(await response.json()) : null;
+  } catch {
+    return null;
+  }
 }

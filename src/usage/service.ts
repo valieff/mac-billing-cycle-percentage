@@ -7,6 +7,7 @@ import {
   providerIds,
   providerNames,
   type FetchResult,
+  type Meter,
   type ProviderAction,
   type ProviderId,
   type ProviderStatus,
@@ -17,21 +18,45 @@ const maxBackoffMs = 30 * 60_000;
 /** Opening the panel refreshes readings older than this. */
 const freshMs = 60_000;
 
-/** What the tray and the panel need to draw one provider. */
-export interface ProviderView {
-  id: ProviderId;
-  name: string;
-  status: ProviderStatus;
-  message: string | null;
-  action: ProviderAction;
+/** One limit, ready to draw: how much is used and how much of its window has passed. */
+export interface MeterView {
   /** 0–1, or null when unknown. */
   usedFraction: number | null;
   usedPercent: number | null;
   elapsedFraction: number | null;
   elapsedPercent: number | null;
   windowEnd: number | null;
+}
+
+export interface DetailView extends MeterView {
+  label: string;
+  showElapsed: boolean;
+  timeLabel: string;
+}
+
+/** What the tray and the panel need to draw one provider. The top level is the weekly limit. */
+export interface ProviderView extends MeterView {
+  id: ProviderId;
+  name: string;
+  status: ProviderStatus;
+  message: string | null;
+  action: ProviderAction;
+  details: DetailView[];
   fetchedAt: number | null;
   busy: boolean;
+}
+
+function meterView(meter: Meter | null, now: number): MeterView {
+  const hasWindow = meter !== null && meter.windowStart !== null && meter.windowEnd !== null;
+  const elapsed = hasWindow ? progressBetween(now, meter.windowStart as number, meter.windowEnd as number) : null;
+  const used = meter?.usedPercent ?? null;
+  return {
+    usedFraction: used === null ? null : used / 100,
+    usedPercent: used === null ? null : Math.floor(used),
+    elapsedFraction: elapsed?.fraction ?? null,
+    elapsedPercent: elapsed?.percent ?? null,
+    windowEnd: hasWindow ? meter.windowEnd : null,
+  };
 }
 
 interface ProviderState {
@@ -179,13 +204,12 @@ export class UsageService {
     const enabled = this.isEnabled(id);
     const cached = enabled ? this.cache[id] : undefined;
     const usage = cached === undefined ? null : rollForward(cached.usage, now);
-    const hasWindow = usage !== null && usage.windowStart !== null && usage.windowEnd !== null;
-    const elapsed = hasWindow ? progressBetween(now, usage.windowStart as number, usage.windowEnd as number) : null;
-    const used = usage?.usedPercent ?? null;
+    const week = meterView(usage, now);
+    const cachedEnd = cached?.usage.windowEnd ?? null;
 
     let status: ProviderStatus = enabled ? state.status : "off";
     let message = enabled ? state.message : null;
-    if (status === "ok" && cached !== undefined && used === null && hasWindow && now >= cached.usage.windowEnd!) {
+    if (status === "ok" && week.usedPercent === null && cachedEnd !== null && now >= cachedEnd) {
       // The cached week ended and no new reading arrived yet.
       status = "stale";
       message = "A new week started. Waiting for a fresh reading.";
@@ -197,11 +221,13 @@ export class UsageService {
       status,
       message,
       action: enabled ? state.action : null,
-      usedFraction: used === null ? null : used / 100,
-      usedPercent: used === null ? null : Math.floor(used),
-      elapsedFraction: elapsed?.fraction ?? null,
-      elapsedPercent: elapsed?.percent ?? null,
-      windowEnd: hasWindow ? usage.windowEnd : null,
+      ...week,
+      details: (usage?.details ?? []).map((detail) => ({
+        ...meterView(detail, now),
+        label: detail.label,
+        showElapsed: detail.showElapsed,
+        timeLabel: detail.timeLabel,
+      })),
       fetchedAt: cached?.fetchedAt ?? null,
       busy: state.inFlight !== null,
     };

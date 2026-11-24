@@ -51,6 +51,7 @@ export async function fetchClaudeUsage(): Promise<FetchResult> {
     let response: Response;
     try {
       response = await net.fetch(usageUrl, {
+        signal: AbortSignal.timeout(20_000),
         headers: {
           Authorization: `Bearer ${login.accessToken}`,
           "anthropic-beta": "oauth-2025-04-20",

@@ -1,16 +1,26 @@
 type ProviderId = "claude" | "cursor";
 
-interface ProviderView {
-  id: ProviderId;
-  name: string;
-  status: "off" | "ok" | "stale" | "attention";
-  message: string | null;
-  action: "reconnect" | null;
+interface MeterView {
   usedFraction: number | null;
   usedPercent: number | null;
   elapsedFraction: number | null;
   elapsedPercent: number | null;
   windowEnd: number | null;
+}
+
+interface DetailView extends MeterView {
+  label: string;
+  showElapsed: boolean;
+  timeLabel: string;
+}
+
+interface ProviderView extends MeterView {
+  id: ProviderId;
+  name: string;
+  status: "off" | "ok" | "stale" | "attention";
+  message: string | null;
+  action: "reconnect" | null;
+  details: DetailView[];
   fetchedAt: number | null;
   busy: boolean;
 }
@@ -99,7 +109,13 @@ function button(text: string, className: string, onClick: () => void, disabled =
   return element;
 }
 
-function barRow(label: string, kind: "used" | "week", fraction: number | null, percent: number | null) {
+function barRow(
+  label: string,
+  kind: "used" | "week",
+  fraction: number | null,
+  percent: number | null,
+  wide = false,
+): HTMLDivElement {
   const fill = el("span");
   fill.style.width = `${Math.round(Math.min(1, Math.max(0, fraction ?? 0)) * 1000) / 10}%`;
   const bar = el("div", { className: `bar ${kind}` }, fill);
@@ -112,14 +128,14 @@ function barRow(label: string, kind: "used" | "week", fraction: number | null, p
   }
   return el(
     "div",
-    { className: "bar-row" },
+    { className: wide ? "bar-row wide" : "bar-row" },
     el("span", { className: "muted", text: label }),
     bar,
     el("span", { className: "value", text: percent === null ? "–" : `${percent}%` }),
   );
 }
 
-function paceText(view: ProviderView): string | null {
+function paceText(view: MeterView): string | null {
   const parts: string[] = [];
   if (view.windowEnd !== null) {
     parts.push(`Resets ${resetFormat.format(view.windowEnd)}`);
@@ -127,10 +143,27 @@ function paceText(view: ProviderView): string | null {
   if (view.usedPercent !== null && view.elapsedPercent !== null) {
     const difference = view.usedPercent - view.elapsedPercent;
     parts.push(
-      difference === 0 ? "on pace" : `${Math.abs(difference)} pts ${difference > 0 ? "over" : "under"} pace`,
+      difference === 0
+        ? "on pace"
+        : `${Math.abs(difference)} ${Math.abs(difference) === 1 ? "pt" : "pts"} ${difference > 0 ? "over" : "under"} pace`,
     );
   }
   return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/** A used bar, a time-passed bar and the reset and pace line for one limit. */
+function meterRows(meter: MeterView, timeLabel: string): Node[] {
+  const rows: Node[] = [
+    barRow("Used", "used", meter.usedFraction, meter.usedPercent),
+    barRow(timeLabel, "week", meter.elapsedFraction, meter.elapsedPercent),
+  ];
+  const pace = paceText(meter);
+  if (pace !== null) {
+    const over =
+      meter.usedPercent !== null && meter.elapsedPercent !== null && meter.usedPercent > meter.elapsedPercent;
+    rows.push(el("p", { className: over ? "pace over" : "pace muted", text: pace }));
+  }
+  return rows;
 }
 
 function connect(id: ProviderId, rerender: () => void): void {
@@ -172,9 +205,6 @@ function renderProvider(section: HTMLElement, view: ProviderView, rerender: () =
     return;
   }
 
-  const over =
-    view.usedPercent !== null && view.elapsedPercent !== null && view.usedPercent > view.elapsedPercent;
-  const pace = paceText(view);
   const children: Node[] = [
     el(
       "h2",
@@ -185,11 +215,17 @@ function renderProvider(section: HTMLElement, view: ProviderView, rerender: () =
         void window.panelApi.disconnect(view.id);
       }),
     ),
-    barRow("Used", "used", view.usedFraction, view.usedPercent),
-    barRow("Week", "week", view.elapsedFraction, view.elapsedPercent),
+    el("p", { className: "subhead", text: view.id === "claude" ? "This week · all models" : "This week" }),
+    ...meterRows(view, "Week"),
   ];
-  if (pace !== null) {
-    children.push(el("p", { className: over ? "pace over" : "pace muted", text: pace }));
+
+  // Shares of the same week (Cursor and Grok Bot) as single bars under the weekly pair.
+  for (const detail of view.details.filter((item) => !item.showElapsed)) {
+    children.push(barRow(detail.label, "used", detail.usedFraction, detail.usedPercent, true));
+  }
+  // Limits of their own (a model's weekly limit, the 5-hour session) get their own pair of bars.
+  for (const detail of view.details.filter((item) => item.showElapsed)) {
+    children.push(el("p", { className: "subhead", text: detail.label }), ...meterRows(detail, detail.timeLabel));
   }
   const error = connectErrors.get(view.id);
   if (view.status !== "ok" && view.message !== null) {
